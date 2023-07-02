@@ -1,4 +1,4 @@
-defmodule FPE.DatabaseId do
+defmodule DatabaseId do
   require Record
   import Bitwise
 
@@ -12,7 +12,7 @@ defmodule FPE.DatabaseId do
 
   ## Types
 
-  Record.defrecordp(:fpe_database_id_ctx, [
+  Record.defrecordp(:hidseq_database_id_ctx, [
     :algo,
     :header_shift,
     :body_mask,
@@ -20,7 +20,7 @@ defmodule FPE.DatabaseId do
   ])
 
   @type ctx ::
-          record(:fpe_database_id_ctx,
+          record(:hidseq_database_id_ctx,
             algo: algo,
             header_shift: non_neg_integer,
             body_mask: non_neg_integer,
@@ -31,12 +31,12 @@ defmodule FPE.DatabaseId do
 
   # FF3-1 algo
 
-  Record.defrecord(:fpe_database_id_ff3_1, [
+  Record.defrecord(:hidseq_database_id_ff3_1, [
     :ctx
   ])
 
   @typep ff3_1_algo ::
-           record(:fpe_database_id_ff3_1,
+           record(:hidseq_database_id_ff3_1,
              ctx: FF3_1.ctx()
            )
 
@@ -49,10 +49,10 @@ defmodule FPE.DatabaseId do
         header_shift = ceil(:math.log2(carefree_threshold) / 4) * 4
         body_mask = (1 <<< header_shift) - 1
         body_len = div(header_shift, 4)
-        algo = fpe_database_id_ff3_1(ctx: algo_ctx)
+        algo = hidseq_database_id_ff3_1(ctx: algo_ctx)
 
         {:ok,
-         fpe_database_id_ctx(
+         hidseq_database_id_ctx(
            algo: algo,
            header_shift: header_shift,
            body_mask: body_mask,
@@ -65,14 +65,14 @@ defmodule FPE.DatabaseId do
   end
 
   def encrypt!(ctx, id) when id >= 0 do
-    fpe_database_id_ctx(
+    hidseq_database_id_ctx(
       algo: algo,
       header_shift: header_shift,
       body_mask: body_mask,
       body_len: body_len
     ) = ctx
 
-    fpe_database_id_ff3_1(ctx: algo_ctx) = algo
+    hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
     codec = FF3_1.get_codec!(algo_ctx)
 
     header = id >>> header_shift
@@ -85,14 +85,14 @@ defmodule FPE.DatabaseId do
   end
 
   def decrypt!(ctx, encrypted_id) when encrypted_id >= 0 do
-    fpe_database_id_ctx(
+    hidseq_database_id_ctx(
       algo: algo,
       header_shift: header_shift,
       body_mask: body_mask,
       body_len: body_len
     ) = ctx
 
-    fpe_database_id_ff3_1(ctx: algo_ctx) = algo
+    hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
     codec = FF3_1.get_codec!(algo_ctx)
 
     header = encrypted_id >>> header_shift
