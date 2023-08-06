@@ -34,7 +34,7 @@ defmodule HidSeq.MixProject do
       {:credo, "~> 1.7", only: [:dev], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev], runtime: false},
       # FIXME
-      {:fpe, github: "g-andrade/elixir-fpe", branch: "main"},
+      {:ff3_1, github: "g-andrade/elixir-ff3-1", branch: "main"},
       {:recon, "~> 2.3", only: [:dev], runtime: false}
     ]
   end

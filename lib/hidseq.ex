@@ -2,8 +2,7 @@ defmodule DatabaseId do
   require Record
   import Bitwise
 
-  alias FPE.FF3_1
-  alias FPE.FFX.Codec
+  alias FF3_1.FFX.Codec
 
   ## Constants
 
@@ -73,13 +72,13 @@ defmodule DatabaseId do
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
-    codec = FF3_1.get_codec!(algo_ctx)
+    codec = FF3_1.codec(algo_ctx)
 
     header = id >>> header_shift
     tweak = <<header::56>>
-    plaintext = Codec.str_m_radix(codec, _m = body_len, id &&& body_mask)
+    plaintext = Codec.int_to_padded_string(codec, id &&& body_mask, body_len)
     ciphertext = FF3_1.encrypt!(algo_ctx, tweak, plaintext)
-    ciphertext_int = Codec.num_radix(codec, ciphertext)
+    {:ok, ciphertext_int} = Codec.string_to_int(codec, ciphertext)
 
     bor(header <<< header_shift, ciphertext_int)
   end
@@ -93,13 +92,13 @@ defmodule DatabaseId do
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
-    codec = FF3_1.get_codec!(algo_ctx)
+    codec = FF3_1.codec(algo_ctx)
 
     header = encrypted_id >>> header_shift
     tweak = <<header::56>>
-    ciphertext = Codec.str_m_radix(codec, _m = body_len, encrypted_id &&& body_mask)
+    ciphertext = Codec.int_to_padded_string(codec, encrypted_id &&& body_mask, body_len)
     plaintext = FF3_1.decrypt!(algo_ctx, tweak, ciphertext)
-    plaintext_int = Codec.num_radix(codec, plaintext)
+    {:ok, plaintext_int} = Codec.string_to_int(codec, plaintext)
 
     bor(header <<< header_shift, plaintext_int)
   end
