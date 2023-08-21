@@ -1,26 +1,28 @@
 defmodule DatabaseId do
+  require Logger
   require Record
   import Bitwise
 
   ## Constants
 
-  # @world_population_2022 7_942_000_000
-  @world_population 8_055_545_973
-  @default_carefree_threshold 100 * @world_population
+  @world_population_2023 8_000_000_000
+  @default_carefree_threshold 5 * @world_population_2023
 
   ## Types
 
-  Record.defrecordp(:hidseq_database_id_ctx, [
-    :algo,
-    :header_multiplier,
-    :body_len
+  Record.defrecordp(:hidseq_ctx, [
+    :header_shift,
+    :body_mask,
+    :body_ffx_len,
+    :algo
   ])
 
   @type ctx ::
-          record(:hidseq_database_id_ctx,
-            algo: algo,
-            header_multiplier: non_neg_integer,
-            body_len: non_neg_integer
+          record(:hidseq_ctx,
+            header_shift: pos_integer,
+            body_mask: pos_integer,
+            body_ffx_len: pos_integer,
+            algo: algo
           )
 
   @typep algo :: ff3_1_algo
@@ -38,23 +40,24 @@ defmodule DatabaseId do
 
   ## API
 
-  def new_ff3_1(key, carefree_threshold \\ @default_carefree_threshold)
-      when is_integer(carefree_threshold) and carefree_threshold >= 0 do
-    radix = best_radix(carefree_threshold)
+  def new_ff3_1(key, carefree_threshold \\ @default_carefree_threshold) do
+    bits_per_symbol = calc_best_fitting_bits_per_symbol(carefree_threshold)
+    radix = 1 <<< bits_per_symbol
     {:ok, codec} = FF3_1.FFX.Codec.NoSymbols.new(radix)
 
     case FF3_1.new_ctx(key, codec) do
       {:ok, algo_ctx} ->
-        header_exp = ceil(:math.log(carefree_threshold) / :math.log(radix))
-        header_multiplier = Integer.pow(radix, header_exp)
-        body_len = header_exp
+        body_ffx_len = ceil(:math.log2(carefree_threshold) / bits_per_symbol)
+        header_shift = bits_per_symbol * body_ffx_len
+        body_mask = (1 <<< header_shift) - 1
         algo = hidseq_database_id_ff3_1(ctx: algo_ctx)
 
         {:ok,
-         hidseq_database_id_ctx(
-           algo: algo,
-           header_multiplier: header_multiplier,
-           body_len: body_len
+         hidseq_ctx(
+           header_shift: header_shift,
+           body_mask: body_mask,
+           body_ffx_len: body_ffx_len,
+           algo: algo
          )}
 
       {:error, _} = error ->
@@ -65,66 +68,58 @@ defmodule DatabaseId do
   def encrypt!(ctx, id) when id >= 0 do
     alias FF3_1.FFX.Codec.NoSymbols.NumString
 
-    hidseq_database_id_ctx(
-      algo: algo,
-      header_multiplier: header_multiplier,
-      body_len: body_len
+    hidseq_ctx(
+      header_shift: header_shift,
+      body_mask: body_mask,
+      body_ffx_len: body_ffx_len,
+      algo: algo
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
 
-    header = div(id, header_multiplier)
+    header = id >>> header_shift
     tweak = <<header::56>>
-    body = rem(id, header_multiplier)
-    plaintext = %NumString{value: body, length: body_len}
+    body = id &&& body_mask
+    plaintext = %NumString{value: body, length: body_ffx_len}
     ciphertext = FF3_1.encrypt!(algo_ctx, tweak, plaintext)
     ciphertext_int = ciphertext.value
 
-    bor(header <<< header_multiplier, ciphertext_int)
+    bor(header <<< header_shift, ciphertext_int)
   end
 
   def decrypt!(ctx, encrypted_id) when encrypted_id >= 0 do
     alias FF3_1.FFX.Codec.NoSymbols.NumString
 
-    hidseq_database_id_ctx(
-      algo: algo,
-      header_multiplier: header_multiplier,
-      body_len: body_len
+    hidseq_ctx(
+      header_shift: header_shift,
+      body_mask: body_mask,
+      body_ffx_len: body_ffx_len,
+      algo: algo
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
 
-    header = div(encrypted_id, header_multiplier)
+    header = encrypted_id >>> header_shift
+    Logger.debug("header is #{header}")
     tweak = <<header::56>>
-    body = rem(encrypted_id, header_multiplier)
-    ciphertext = %NumString{value: body, length: body_len}
+    body = encrypted_id &&& body_mask
+    ciphertext = %NumString{value: body, length: body_ffx_len}
     plaintext = FF3_1.decrypt!(algo_ctx, tweak, ciphertext)
     plaintext_int = plaintext.value
 
-    bor(header <<< header_multiplier, plaintext_int)
+    bor(header <<< header_shift, plaintext_int)
   end
 
   ## Internal
 
-  defp best_radix(carefree_threshold) do
-    best_radix_recur(_radix = 2, carefree_threshold, _best = nil, _best_imprecision = nil)
+  defp calc_best_fitting_bits_per_symbol(carefree_threshold) do
+    # We go in descending order to prioritize the larger radix when there's a tie
+    15..1
+    |> Enum.min_by(&calc_min_bitsize(&1, carefree_threshold))
   end
 
-  defp best_radix_recur(radix, carefree_threshold, best, best_imprecision) when radix <= 65535 do
-    imprecision = :math.fmod(carefree_threshold, radix)
-
-    if best_imprecision === nil or imprecision <= best_imprecision do
-      if imprecision == 0 and radix >= 16 do
-        radix
-      else
-        best_radix_recur(radix + 1, carefree_threshold, radix, imprecision)
-      end
-    else
-      best_radix_recur(radix + 1, carefree_threshold, best, best_imprecision)
-    end
-  end
-
-  defp best_radix_recur(_radix, _carefree_threshold, best, _best_imprecision) do
-    best
+  def calc_min_bitsize(bits_per_symbol, carefree_threshold) do
+    exponent = ceil(:math.log2(carefree_threshold) / bits_per_symbol)
+    bits_per_symbol * exponent
   end
 end
