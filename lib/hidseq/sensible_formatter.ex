@@ -37,7 +37,7 @@ defmodule HidSeq.SensibleFormatter do
       alias FF3_1.FFX.Codec
 
       numerical_string = Codec.int_to_padded_numerical_string(codec, integer, _pad_count = 0)
-      format_recur(numerical_string, _first_split = true)
+      numerical_string |> String.graphemes() |> Enum.reverse() |> format_recur(_acc = [])
     end
 
     def decode(_formatter, not_a_string) when not is_binary(not_a_string) do
@@ -53,25 +53,15 @@ defmodule HidSeq.SensibleFormatter do
 
     ## Internal
 
-    defp format_recur(string, first_split \\ false) do
-      len = String.length(string)
+    defp format_recur(rev_graphemes, acc) do
+      case rev_graphemes do
+        [a, b, c | [_, _ | _] = next] ->
+          acc = [?-, c, b, a | acc]
+          format_recur(next, acc)
 
-      if len >= 5 do
-        half_len = div(len, 2)
-
-        min_tail_chunk_len =
-          if first_split do
-            4
-          else
-            3
-          end
-
-        n = max(half_len, len - min_tail_chunk_len)
-
-        {left, right} = String.split_at(string, n)
-        "#{format_recur(left)}-#{format_recur(right)}"
-      else
-        string
+        other ->
+          (Enum.reverse(other) ++ acc)
+          |> :unicode.characters_to_binary()
       end
     end
   end
