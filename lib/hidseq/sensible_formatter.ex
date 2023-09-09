@@ -7,7 +7,7 @@ defmodule HidSeq.SensibleFormatter do
   @enforce_keys [:codec]
   defstruct [:codec]
 
-  @opaque t :: %__MODULE__{codec: Codec.t()}
+  @opaque t :: %__MODULE__{codec: FF3_1.FFX.Codec.t()}
 
   ## API
 

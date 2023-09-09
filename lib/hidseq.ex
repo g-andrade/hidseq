@@ -1,28 +1,31 @@
 defmodule DatabaseId do
   require Logger
   require Record
-  import Bitwise
 
   ## Constants
 
-  @world_population_2023 8_000_000_000
-  @default_carefree_threshold 5 * @world_population_2023
+  @default_radix 10
+  @default_carefree_threshold 1_000_000_000
 
   ## Types
 
+  defmodule ParsedNewOpts do
+    @moduledoc false
+    @enforce_keys [:radix, :formatter]
+    defstruct [:radix, :formatter]
+  end
+
   Record.defrecordp(:hidseq_ctx, [
-    :header_shift,
-    :body_mask,
-    :body_ffx_len,
+    :threshold,
+    :encrypted_length,
     :algo,
     :formatter
   ])
 
   @type ctx ::
           record(:hidseq_ctx,
-            header_shift: pos_integer,
-            body_mask: pos_integer,
-            body_ffx_len: pos_integer,
+            threshold: pos_integer,
+            encrypted_length: pos_integer,
             algo: algo,
             formatter: HidSeq.Formatter.t()
           )
@@ -45,90 +48,91 @@ defmodule DatabaseId do
   def new_ff3_1(
         key,
         carefree_threshold \\ @default_carefree_threshold,
-        formatter \\ HidSeq.SensibleFormatter.new!()
+        opts \\ []
       ) do
-    bits_per_symbol = calc_best_fitting_bits_per_symbol(carefree_threshold)
-    radix = 1 <<< bits_per_symbol
-    {:ok, codec} = FF3_1.FFX.Codec.NoSymbols.new(radix)
+    with radix = opts[:radix] || @default_radix,
+         {:ok, codec} <- FF3_1.FFX.Codec.NoSymbols.new(radix),
+         {:ok, algo_ctx} <- FF3_1.new_ctx(key, codec),
+         %{min_length: min_encrypted_length, max_length: max_encrypted_length} =
+           FF3_1.constraints(algo_ctx),
+         {:ok, encrypted_length} <- validate_threshold(carefree_threshold, radix),
+         :ok <-
+           validate_encrypted_length(
+             carefree_threshold,
+             encrypted_length,
+             min_encrypted_length,
+             max_encrypted_length
+           ),
+         {:ok, formatter} = validate_formatter(opts, radix) do
+      algo = hidseq_database_id_ff3_1(ctx: algo_ctx)
 
-    case FF3_1.new_ctx(key, codec) do
-      {:ok, algo_ctx} ->
-        %{min_length: min_body_ffx_length} = FF3_1.constraints(algo_ctx)
-
-        body_ffx_len =
-          max(
-            min_body_ffx_length,
-            ceil(:math.log2(carefree_threshold) / bits_per_symbol)
-          )
-
-        header_shift = bits_per_symbol * body_ffx_len
-        body_mask = (1 <<< header_shift) - 1
-        algo = hidseq_database_id_ff3_1(ctx: algo_ctx)
-
-        {:ok,
-         hidseq_ctx(
-           header_shift: header_shift,
-           body_mask: body_mask,
-           body_ffx_len: body_ffx_len,
-           algo: algo,
-           formatter: formatter
-         )}
-
+      {:ok,
+       hidseq_ctx(
+         threshold: carefree_threshold,
+         encrypted_length: encrypted_length,
+         algo: algo,
+         formatter: formatter
+       )}
+    else
       {:error, _} = error ->
         error
     end
   end
 
-  def encrypt!(ctx, id) when id >= 0 do
+  def encrypt!(ctx, id) when is_integer(id) and id >= 0 do
     alias HidSeq.Formatter
     alias FF3_1.FFX.Codec.NoSymbols.NumString
 
     hidseq_ctx(
-      header_shift: header_shift,
-      body_mask: body_mask,
-      body_ffx_len: body_ffx_len,
+      threshold: threshold,
+      encrypted_length: encrypted_length,
       algo: algo,
       formatter: formatter
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
 
-    header = id >>> header_shift
+    header = div(id, threshold)
     tweak = <<header::56>>
-    body = id &&& body_mask
-    plaintext = %NumString{value: body, length: body_ffx_len}
-    ciphertext = FF3_1.encrypt!(algo_ctx, tweak, plaintext)
-    ciphertext_int = ciphertext.value
 
-    encrypted = bor(header <<< header_shift, ciphertext_int)
-    Formatter.encode!(formatter, encrypted)
+    plaintext = %NumString{
+      value: rem(id, threshold),
+      length: encrypted_length
+    }
+
+    ciphertext = FF3_1.encrypt!(algo_ctx, tweak, plaintext)
+
+    encrypted_id = header * threshold + ciphertext.value
+    Formatter.encode!(formatter, encrypted_id)
   end
 
-  def decrypt(ctx, encrypted_and_formatted) do
+  def decrypt(ctx, encrypted_and_formatted_id) do
     alias HidSeq.Formatter
     alias FF3_1.FFX.Codec.NoSymbols.NumString
 
     hidseq_ctx(
-      header_shift: header_shift,
-      body_mask: body_mask,
-      body_ffx_len: body_ffx_len,
+      threshold: threshold,
+      encrypted_length: encrypted_length,
       algo: algo,
       formatter: formatter
     ) = ctx
 
-    case Formatter.decode(formatter, encrypted_and_formatted) do
-      {:ok, encrypted} ->
+    case Formatter.decode(formatter, encrypted_and_formatted_id) do
+      {:ok, encrypted_id} ->
         hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
 
-        header = encrypted >>> header_shift
-        Logger.debug("header is #{header}")
+        header = div(encrypted_id, threshold)
         tweak = <<header::56>>
-        body = encrypted &&& body_mask
-        ciphertext = %NumString{value: body, length: body_ffx_len}
-        plaintext = FF3_1.decrypt!(algo_ctx, tweak, ciphertext)
-        plaintext_int = plaintext.value
 
-        {:ok, bor(header <<< header_shift, plaintext_int)}
+        ciphertext = %NumString{
+          value: rem(encrypted_id, threshold),
+          length: encrypted_length
+        }
+
+        plaintext = FF3_1.decrypt!(algo_ctx, tweak, ciphertext)
+
+        id = header * threshold + plaintext.value
+        {:ok, id}
 
       {:error, _} = error ->
         error
@@ -137,14 +141,41 @@ defmodule DatabaseId do
 
   ## Internal
 
-  defp calc_best_fitting_bits_per_symbol(carefree_threshold) do
-    # We go in descending order to prioritize the larger radix when there's a tie
-    15..1
-    |> Enum.min_by(&calc_min_bitsize(&1, carefree_threshold))
+  defp validate_threshold(value, radix) when is_integer(value) and value >= 2 do
+    threshold_length = Integer.to_string(value, radix) |> String.length()
+    encrypted_length = Integer.to_string(value - 1, radix) |> String.length()
+
+    if encrypted_length + 1 == threshold_length do
+      {:ok, encrypted_length}
+    else
+      {:error, {:invalid_threshold, {:not_lowest_value_of_its_length, value}}}
+    end
   end
 
-  defp calc_min_bitsize(bits_per_symbol, carefree_threshold) do
-    exponent = ceil(:math.log2(carefree_threshold) / bits_per_symbol)
-    bits_per_symbol * exponent
+  defp validate_threshold(value, _radix) do
+    {:error, {:invalid_threshold, {:not_a_integer_greater_than_or_equal_to_2, value}}}
+  end
+
+  defp validate_encrypted_length(threshold, value, min, max) do
+    cond do
+      value in min..max ->
+        :ok
+
+      value < min ->
+        {:error, {:invalid_threshold, {:length_too_short, threshold, min: min}}}
+
+      value > max ->
+        {:error, {:invalid_threshold, {:length_too_long, threshold, max: max}}}
+    end
+  end
+
+  defp validate_formatter(opts, radix) do
+    case opts[:formatter] do
+      %{__struct__: _} = formatter ->
+        {:ok, formatter}
+
+      nil ->
+        HidSeq.SensibleFormatter.new(radix)
+    end
   end
 end
