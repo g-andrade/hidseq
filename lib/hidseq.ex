@@ -80,14 +80,12 @@ defmodule DatabaseId do
   end
 
   def encrypt!(ctx, id) when is_integer(id) and id >= 0 do
-    alias HidSeq.Formatter
     alias FF3_1.FFX.Codec.NoSymbols.NumString
 
     hidseq_ctx(
       threshold: threshold,
       encrypted_length: encrypted_length,
-      algo: algo,
-      formatter: formatter
+      algo: algo
     ) = ctx
 
     hidseq_database_id_ff3_1(ctx: algo_ctx) = algo
@@ -101,8 +99,14 @@ defmodule DatabaseId do
     }
 
     ciphertext = FF3_1.encrypt!(algo_ctx, tweak, plaintext)
+    header * threshold + ciphertext.value
+  end
 
-    encrypted_id = header * threshold + ciphertext.value
+  def encrypt_and_format!(ctx, id) do
+    alias HidSeq.Formatter
+
+    encrypted_id = encrypt!(ctx, id)
+    formatter = hidseq_ctx(ctx, :formatter)
     Formatter.encode!(formatter, encrypted_id)
   end
 
@@ -162,10 +166,14 @@ defmodule DatabaseId do
         :ok
 
       value < min ->
-        {:error, {:invalid_threshold, {:length_too_short, threshold, min: min}}}
+        # threshold has one more digit than value
+        threshold_min = min + 1
+        {:error, {:invalid_threshold, {:length_too_short, threshold, min: threshold_min}}}
 
       value > max ->
-        {:error, {:invalid_threshold, {:length_too_long, threshold, max: max}}}
+        # threshold has one more digit than value
+        threshold_max = max + 1
+        {:error, {:invalid_threshold, {:length_too_long, threshold, max: threshold_max}}}
     end
   end
 

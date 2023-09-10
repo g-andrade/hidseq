@@ -47,7 +47,7 @@ defmodule HidSeq.SensibleFormatter do
     def decode(%SensibleFormatter{codec: codec}, string) do
       alias FF3_1.FFX.Codec
 
-      numerical_string = String.split(string, "-", trim: true) |> Enum.join()
+      numerical_string = String.split(string, ".", trim: true) |> Enum.join()
       Codec.numerical_string_to_int(codec, numerical_string)
     end
 
@@ -56,7 +56,7 @@ defmodule HidSeq.SensibleFormatter do
     defp format_recur(rev_graphemes, acc) do
       case rev_graphemes do
         [a, b, c | [_, _ | _] = next] ->
-          acc = [?-, c, b, a | acc]
+          acc = [?., c, b, a | acc]
           format_recur(next, acc)
 
         other ->
