@@ -1,4 +1,5 @@
 defmodule HidSeq.NoFormatter do
+  @moduledoc false
   alias HidSeq.Formatter
 
   @enforce_keys []
@@ -8,7 +9,7 @@ defmodule HidSeq.NoFormatter do
 
   ## API
 
-  def new!() do
+  def new! do
     %__MODULE__{}
   end
 

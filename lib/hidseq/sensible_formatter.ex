@@ -1,4 +1,5 @@
 defmodule HidSeq.SensibleFormatter do
+  @moduledoc false
   alias HidSeq.Formatter
   alias HidSeq.Utils
 
@@ -47,7 +48,7 @@ defmodule HidSeq.SensibleFormatter do
     def decode(%SensibleFormatter{codec: codec}, string) do
       alias FF3_1.FFX.Codec
 
-      numerical_string = String.split(string, ".", trim: true) |> Enum.join()
+      numerical_string = string |> String.split(".", trim: true) |> Enum.join()
       Codec.numerical_string_to_int(codec, numerical_string)
     end
 
@@ -60,8 +61,7 @@ defmodule HidSeq.SensibleFormatter do
           format_recur(next, acc)
 
         other ->
-          (Enum.reverse(other) ++ acc)
-          |> :unicode.characters_to_binary()
+          :unicode.characters_to_binary(Enum.reverse(other, acc))
       end
     end
   end

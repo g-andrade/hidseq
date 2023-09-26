@@ -1,4 +1,5 @@
-defmodule DatabaseId do
+defmodule HidSeq do
+  @moduledoc false
   require Logger
   require Record
 
@@ -22,13 +23,22 @@ defmodule DatabaseId do
     :formatter
   ])
 
-  @type ctx ::
-          record(:hidseq_ctx,
-            threshold: pos_integer,
-            encrypted_length: pos_integer,
-            algo: algo,
-            formatter: HidSeq.Formatter.t()
-          )
+  @type key :: FF3_1.key()
+  @type radix :: FF3_1.radix()
+
+  @type opts :: [
+          carefree_threshold: pos_integer,
+          radix: radix,
+          formatter: HidSeq.Formatter.t()
+        ]
+
+  @opaque ctx ::
+            record(:hidseq_ctx,
+              threshold: pos_integer,
+              encrypted_length: pos_integer,
+              algo: algo,
+              formatter: HidSeq.Formatter.t()
+            )
 
   @typep algo :: ff3_1_algo
 
@@ -45,13 +55,12 @@ defmodule DatabaseId do
 
   ## API
 
-  def new_ff3_1(
-        key,
-        carefree_threshold \\ @default_carefree_threshold,
-        opts \\ []
-      ) do
-    with radix = opts[:radix] || @default_radix,
-         {:ok, codec} <- FF3_1.FFX.Codec.NoSymbols.new(radix),
+  @spec new_ff3_1(key, opts) :: {:ok, ctx} | {:error, term}
+  def new_ff3_1(key, opts \\ []) do
+    carefree_threshold = opts[:carefree_threshold] || @default_carefree_threshold
+    radix = opts[:radix] || @default_radix
+
+    with {:ok, codec} <- FF3_1.FFX.Codec.NoSymbols.new(radix),
          {:ok, algo_ctx} <- FF3_1.new_ctx(key, codec),
          %{min_length: min_encrypted_length, max_length: max_encrypted_length} =
            FF3_1.constraints(algo_ctx),
@@ -63,7 +72,7 @@ defmodule DatabaseId do
              min_encrypted_length,
              max_encrypted_length
            ),
-         {:ok, formatter} = validate_formatter(opts, radix) do
+         {:ok, formatter} <- validate_formatter(opts, radix) do
       algo = hidseq_database_id_ff3_1(ctx: algo_ctx)
 
       {:ok,
@@ -111,8 +120,8 @@ defmodule DatabaseId do
   end
 
   def decrypt(ctx, encrypted_and_formatted_id) do
-    alias HidSeq.Formatter
     alias FF3_1.FFX.Codec.NoSymbols.NumString
+    alias HidSeq.Formatter
 
     hidseq_ctx(
       threshold: threshold,
@@ -146,8 +155,8 @@ defmodule DatabaseId do
   ## Internal
 
   defp validate_threshold(value, radix) when is_integer(value) and value >= 2 do
-    threshold_length = Integer.to_string(value, radix) |> String.length()
-    encrypted_length = Integer.to_string(value - 1, radix) |> String.length()
+    threshold_length = value |> Integer.to_string(radix) |> String.length()
+    encrypted_length = (value - 1) |> Integer.to_string(radix) |> String.length()
 
     if encrypted_length + 1 == threshold_length do
       {:ok, encrypted_length}
